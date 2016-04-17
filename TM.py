@@ -7,12 +7,13 @@ List of things to do:
     - write in an edit of user password
     - fix defrag option and SFC
     - finish itunes options
+    - use threads make file sorter faster
     - keep music album covers from being moved into images folder... look at base folder, if can find that name in music folder don't copy
 '''
 
 import os
 import webbrowser
-import time as t
+import time
 import re
 import shutil
 import urllib
@@ -21,8 +22,11 @@ import subprocess
 import stagger
 import portScanner
 import ctypes
+import threading
+from queue import Queue
 
 # define variables
+q = Queue()
 fileName = "JARVIS-master.txt"
 fileBase = "C:\\Python34"
 fileHome = "C:\\Python34\\Documents"
@@ -35,7 +39,9 @@ cType = ""
 cLocation = ""
 userVerified = ""
 cName = ""
-cAvailTasks = ["Add Multimedia to Server", "Open Web Browser", "Perform System Maintenance", "Port Scanner", "Itunes Duplicate Remover",
+#global sReport
+cAvailTasks = ["Add Multimedia to Server", "Open Web Browser", "Perform System Maintenance", "Port Scanner",
+               "Itunes Duplicate Remover",
                "Itunes New Album Checker"]
 
 
@@ -168,12 +174,30 @@ def readFile(cType, cUser, cPassword, tmpFile):
         return "Valid"
 
 
-def fileSorter(fromLocation, toLocation):
+def fileSorter(fLocation, tLocation):
     name = ""
+    global fromLocation
+    global toLocation
+    global videoFileExt
+    global musicFileExt
+    global imageFileExt
+    global report
+    global fileSeason
+    global movieFolder
+    global picFolder
+    global showFolder
+    global musicFolder
+    global printLock
+    global threadLock
+    global writeLock
+
+
+    fromLocation = fLocation
+    toLocation = tLocation
     videoFileExt = (".mp4", ".avi", ".mkv")
     musicFileExt = (".mp3")
     imageFileExt = (".pdf", ".jpg", ".tif", ".gif", ".jpeg", ".bmp", ".png", ".svg")
-    date = t.localtime(t.time())
+    date = time.localtime(time.time())
     dateFormated = '%d_%d_%d' % (date[1], date[2], date[0] % 100)
     report = os.environ['USERPROFILE'] + "\Desktop" + "\\" + dateFormated + "_mediaSortReport.txt"
     fileSeason = ['s\d+e\d+', 'S\d+E\d+']
@@ -185,12 +209,12 @@ def fileSorter(fromLocation, toLocation):
     # search for each type folder(ex.pictures,movies,shows,music, etc)
     for root, dirs, files in os.walk(toLocation):
         for name in dirs:
-            
+
             '''
             could write this to set folders and names based off of where the, for example, .mp4 files are located... so
             if those file types were found in "blah blah" then the movieFolder name would be "blah blah
             '''
-            if name.find("@") < 0 and root.find("@") < 0:      
+            if name.find("@") < 0 and root.find("@") < 0:
                 if name.upper() == "MOVIES":
                     movieFolder = NewFolder(name, os.path.join(root, name), toLocation)
                 elif name.upper() == "SHOWS":
@@ -200,71 +224,105 @@ def fileSorter(fromLocation, toLocation):
                 elif name.upper() == "PICTURES":
                     picFolder = NewFolder(name, os.path.join(root, name), toLocation)
 
-    sReport = open(report, "a")
-    sReport.write("Sort Report for " + dateFormated + "\n")
-    sReport.write("This report show what files were sorted and their new location.")
+    threadLock = threading.Lock()
+    printLock  = threading.Lock()
+    writeLock  = threading.Lock()
+
+    writeReport("Sort Report for " + dateFormated + "\n")
+    writeReport("This report show what files were sorted and their new location." + "\n")
+
+    filecnt = 0
     for root, dirs, files in os.walk(fromLocation):
         for name in files:
-            # get name and init
-            sFile = NewFile(name)
-            sFile.root = root
-            sFile.path = os.path.join(root, name)
-            if sFile.root != fromLocation:
-                sFile.baselevel = False
+            filecnt += 1
+            fs = threading.Thread(target=sortFile,args=(name,root,dirs))
+            fs.daemon = True
+            fs.start()
+    '''
+    for worker in range(filecnt):
+        q.put(worker)
 
-            # set the type of file
-            if sFile.name.endswith(videoFileExt):
-                sFile.type = "video"
-            elif sFile.name.endswith(musicFileExt):
-                sFile.type = "music"
-            elif sFile.name.endswith(imageFileExt):
-                sFile.type = "image"
-            else:
-                sFile.type = "NA"
+    start = time.time()
 
-            if sFile.type == "video":
-                # only care about season info if its a video
-                for list in fileSeason:
-                    regex = re.compile(list)
-                    list2 = regex.findall(name)
-                    for l in list2:
-                        if l != "":
-                            sFile.l1 = l
-                            sFile.hasseason = True
-                            if len(sFile.l1) == 6:
-                                sFile.seasonnum = int(sFile.l1[1:3])
-                            if len(sFile.l1) == 4:
-                                sFile.seasonnum = int(sFile.l1[1:2])
+    q.join()
+    '''
 
-            if sFile.type == "video":
-                if sFile.hasseason == True:
-                    # shows
-                    # find Show Folder
-                    tmpPath = findFolder("folder", sFile.name, showFolder.path, str(sFile.seasonnum))
-                    if sFile.seasonnum != 0:
-                        # find season Folder
-                        tmpPath = findFolder("season", str(sFile.seasonnum), tmpPath, str(sFile.seasonnum))
-                    sFile.moveto = tmpPath
-                else:
-                    # Movies
-                    sFile.moveto = movieFolder.path
-            elif sFile.type == "image":
-                sFile.moveto = picFolder.path
-            elif sFile.type == "music":
-                tmpPath = ""
-                audiofile = stagger.read_tag(sFile.path)
-                tmpPath = findFolder("folder", audiofile.artist, musicFolder.path,"")
-                tmpPath = findFolder("folder", audiofile.album, tmpPath,"")
-                sFile.moveto = tmpPath
-            if sFile.moveto != "":
-                sReport.write("\n")
-                sReport.write("File " + sFile.path + " was moved to " + sFile.moveto + "\\" + sFile.name)
+    fs.join()
 
-                if not os.path.exists(sFile.moveto + "\\" + sFile.name):
-                    print(sFile.name)
-                    shutil.copy(sFile.path, sFile.moveto + "\\" + sFile.name)
+'''
+def threader(fromLocation):
+    while True:
+        worker = q.get()
+        sortFile(name,root,dirs)
+        q.task_done()
+'''
 
-    sReport.close()
+def writeReport(message):
+    with writeLock:
+        sReport = open(report,"a")
+        sReport.write(message)
+        sReport.close()
+
+
+def sortFile(name, root, dirs):
+    sFile = NewFile(name)
+    sFile.root = root
+    sFile.path = os.path.join(root, name)
+    if sFile.root != fromLocation:
+        sFile.baselevel = False
+
+    # set the type of file
+    if sFile.name.endswith(videoFileExt):
+        sFile.type = "video"
+    elif sFile.name.endswith(musicFileExt):
+        sFile.type = "music"
+    elif sFile.name.endswith(imageFileExt):
+        sFile.type = "image"
+    else:
+        sFile.type = "NA"
+
+    if sFile.type == "video":
+        # only care about season info if its a video
+        for list in fileSeason:
+            regex = re.compile(list)
+            list2 = regex.findall(name)
+            for l in list2:
+                if l != "":
+                    sFile.l1 = l
+                    sFile.hasseason = True
+                    if len(sFile.l1) == 6:
+                        sFile.seasonnum = int(sFile.l1[1:3])
+                    if len(sFile.l1) == 4:
+                        sFile.seasonnum = int(sFile.l1[1:2])
+
+    if sFile.type == "video":
+        if sFile.hasseason == True:
+            # shows
+            # find Show Folder
+            tmpPath = findFolder("folder", sFile.name, showFolder.path, str(sFile.seasonnum))
+            if sFile.seasonnum != 0:
+                # find season Folder
+                tmpPath = findFolder("season", str(sFile.seasonnum), tmpPath, str(sFile.seasonnum))
+            sFile.moveto = tmpPath
+        else:
+            # Movies
+            sFile.moveto = movieFolder.path
+    elif sFile.type == "image":
+        sFile.moveto = picFolder.path
+    elif sFile.type == "music":
+        tmpPath = ""
+        audiofile = stagger.read_tag(sFile.path)
+        tmpPath = findFolder("folder", audiofile.artist, musicFolder.path, "")
+        tmpPath = findFolder("folder", audiofile.album, tmpPath, "")
+        sFile.moveto = tmpPath
+    if sFile.moveto != "":
+        writeReport( sFile.path + " was moved to " + sFile.moveto + "\\" + sFile.name + "\n")
+
+        if not os.path.exists(sFile.moveto + "\\" + sFile.name):
+            shutil.copy(sFile.path, sFile.moveto + "\\" + sFile.name)
+            with printLock:
+                print(sFile.name)
+
 
 
 '''
@@ -274,10 +332,12 @@ def getExt(cFile):
 '''
 
 
+
 def findFolder(cType, tmpchar1, tmpchar2, tmpchar3):
     tmpFolder = ""
     tmpFolderName = tmpchar1.upper()
     tmpFolderPos = 0
+    guessList = []
 
     if cType == "folder":
         tmpFolderName = tmpFolderName.replace(".", " ")
@@ -304,21 +364,26 @@ def findFolder(cType, tmpchar1, tmpchar2, tmpchar3):
                 tmpName = tmpName.replace(" ", "")
                 # used 6 characters b/c didn't want the season and episode info in there
                 tmpName2 = tmpchar1
-                tmpName2 = tmpName2.replace(".","")
+                tmpName2 = tmpName2.replace(".", "")
                 tmpName2 = tmpName2.upper()[0:6]
-                #tmpName2 = tmpchar1.upper()[0:6]
-                #tmpName2 = tmpName2.replace(".","")
-                #print(tmpName + " " + tmpName2)
+                # tmpName2 = tmpchar1.upper()[0:6]
+                # tmpName2 = tmpName2.replace(".","")
+                # print(tmpName + " " + tmpName2)
                 if tmpName.find(tmpName2) >= 0:
                     tmpFolder = str(tmpchar2 + "\\" + name2)
 
-        #switch search key word and try again
+        # switch search key word and try again
         if tmpFolder == "":
             for name2 in dirs2:
                 if tmpFolder == "":
                     tmpName = name2.upper()
                     tmpName = tmpName.replace(" ", "")
-                    tmpName2 = guessList[len(guessList) - 1]
+                    tmpint = 1
+                    while len(guessList) - tmpint >= 0 and len(guessList[len(guessList) - tmpint]) < 3:
+                        tmpint += 1
+                        tmpName2 = guessList[len(guessList) - tmpint]
+
+                    tmpName = tmpName.replace(".","")
                     if tmpName.find(tmpName2) >= 0:
                         tmpFolder = str(tmpchar2 + "\\" + name2)
 
@@ -329,18 +394,19 @@ def findFolder(cType, tmpchar1, tmpchar2, tmpchar3):
 
 
 def createFolder(cPath):
-    if not os.path.exists(cPath):
-        try:
-            os.makedirs(cPath)
-        except OSError:
-            print("There was an error creating folder")
-            pass
+    with threadLock:
+        if not os.path.exists(cPath):
+            try:
+                os.makedirs(cPath)
+            except OSError:
+                print("There was an error creating folder= " + cPath)
+                pass
 
 
 # User enters username and password then we varify with readFile
 def verifyUser():
     varified = ""
-    varified = "Valid" #testing
+    varified = "Valid"  # testing
     while not varified == "Valid" and not varified == "Bailout":
         varified = ""
         tmpUserName = input("Enter Username/Exit: ")
@@ -351,7 +417,7 @@ def verifyUser():
             varified = readFile("verifyUser", tmpUserName, tmpPassword, recordFile)
             if not varified == "Valid":
                 tmpStr = input(
-                    "Username " + tmpUserName + " does not exist. Whould you like to create this user?... Yes/No? ")
+                        "Username " + tmpUserName + " does not exist. Whould you like to create this user?... Yes/No? ")
                 if tmpStr.upper() == "YES":
                     varified = readFile("addUser", tmpUserName, tmpPassword, recordFile)
         if varified == "Valid":
@@ -364,7 +430,7 @@ def defrag():
     dl = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     drives = ['%s:' % d for d in dl if os.path.exists('%s:' % d)]
 
-    #only on mounted drives... not network mapped drives
+    # only on mounted drives... not network mapped drives
     for d in drives:
         return_code = subprocess.call("fsutil fsinfo drivetype " + d)
         if return_code == 0:
@@ -376,13 +442,15 @@ def defrag():
                 except OSError:
                     print("defrag of " + d + " failed")
 
+
 def scanports():
-        scanThred = input("Enter # of threds to use: ")
-        scanStart = input("Enter starting port: ")
-        scanEnd = input("Enter ending port: ")
-        scanHost = input("Enter host Url or IP address: ")
-        openports = portScanner.start_scan(scanHost,int(scanThred),int(scanStart),int(scanEnd))
-        print("Ports " + openports + " are open!")
+    scanThred = input("Enter # of threds to use: ")
+    scanStart = input("Enter starting port: ")
+    scanEnd = input("Enter ending port: ")
+    scanHost = input("Enter host Url or IP address: ")
+    openports = portScanner.start_scan(scanHost, int(scanThred), int(scanStart), int(scanEnd))
+    print("Ports " + openports + " are open!")
+
 
 def runTask(tmpTask):
     if tmpTask == "Add Multimedia to Server":
@@ -395,7 +463,7 @@ def runTask(tmpTask):
             print(html)
         '''
     elif tmpTask == "Perform System Maintenance":
-        #check to see if has admin rights
+        # check to see if has admin rights
         try:
             is_admin = os.getuid() == 0
         except:
@@ -415,60 +483,66 @@ def runTask(tmpTask):
                 subprocess.run("sfc /scannow")
 
     elif tmpTask == "Port Scanner":
-        scanports() 
+        scanports()
 
     else:
         print("Could not complete that task... Contact Admin!")
 
 
-'''
-*******MAIN*******
-'''
+def Main():
+    '''
+    *******MAIN*******
+    '''
+    global recordFile
 
-# make sure homefolder exists
-if not os.path.exists(fileBase):
-    os.mkdir(fileBase)
-if not os.path.exists(fileHome):
-    os.mkdir(fileHome)
+    # make sure homefolder exists
+    if not os.path.exists(fileBase):
+        os.mkdir(fileBase)
+    if not os.path.exists(fileHome):
+        os.mkdir(fileHome)
 
-recordFile = fileHome + "\\" + fileName
+    recordFile = fileHome + "\\" + fileName
 
-#if file/folder existed then verify user else assume initial setup
-if os.path.exists(recordFile):
-    userVerified = verifyUser()
-else:
-    print("No users found...creating one now!")
-    #user = createUser()
-    userVerified = readFile("createAdmin","","",recordFile)
+    # if file/folder existed then verify user else assume initial setup
+    if os.path.exists(recordFile):
+        userVerified = verifyUser()
+    else:
+        print("No users found...creating one now!")
+        # user = createUser()
+        userVerified = readFile("createAdmin", "", "", recordFile)
 
-'''
-#need to uncomment this when live so can validate user also comment userverified = "valid" below
-'''
+    '''
+    #need to uncomment this when live so can validate user also comment userverified = "valid" below
+    '''
 
-userVerified = "Valid"
-if userVerified == "Valid":
-    bailout = False
-    tmpCnt = 0
-    while bailout == False:
-        # display avail tasks
-        if tmpCnt > 0:
+    userVerified = "Valid"
+    if userVerified == "Valid":
+        bailout = False
+        tmpCnt = 0
+        while bailout == False:
+            # display avail tasks
+            if tmpCnt > 0:
+                print("\n")
+            for lines in cAvailTasks:
+                print(str(cAvailTasks.index(lines)) + ". " + lines)
+
+            tmpCnt += 1
             print("\n")
-        for lines in cAvailTasks:
-            print(str(cAvailTasks.index(lines)) + ". " + lines)
-
-        tmpCnt += 1
-        print("\n")
-        selectTask = input("Enter number of ask you want to run: ")
-        if selectTask.upper() == "EXIT":
-            bailout = True
-        else:
-            selectTask = cAvailTasks[int(selectTask)]
-            runTask(selectTask)
+            selectTask = input("Enter number of ask you want to run: ")
+            if selectTask.upper() == "EXIT":
+                bailout = True
+            else:
+                selectTask = cAvailTasks[int(selectTask)]
+                runTask(selectTask)
 
 
-else:
-    exit()
+    else:
+        exit()
 
-'''
-*****END MAIN*****
-'''
+    '''
+    *****END MAIN*****
+    '''
+
+
+if __name__ == "__main__":
+    Main()
