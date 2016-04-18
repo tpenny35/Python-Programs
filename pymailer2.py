@@ -6,8 +6,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 
-mailName = "pymail1017@gmail.com"
-mailPass = "P3nny1017"
+mailName = "add email address here"
+mailPass = "add password here"
 
 def sendmail(sendFrom,sendTo,sendSub,sendMsg,attachment):
     sendSub = sendSub + "\n"
